@@ -222,6 +222,7 @@ class GalleryDlRunner:
         if self.config.proxy:
             env["https_proxy"] = self.config.proxy
             env["http_proxy"] = self.config.proxy
+        cmd_str = " ".join(shlex.quote(part) for part in command)
         try:
             completed = subprocess.run(
                 command,
@@ -232,10 +233,8 @@ class GalleryDlRunner:
                 env=env,
             )
         except subprocess.TimeoutExpired as exc:
-            cmd_str = " ".join(shlex.quote(part) for part in command)
             self.logger.debug("gallery-dl cmd=%s timeout", cmd_str)
             raise TimeoutError("gallery-dl timed out") from exc
-        cmd_str = " ".join(shlex.quote(part) for part in command)
         self.logger.debug(
             "gallery-dl cmd=%s returncode=%s",
             cmd_str,
