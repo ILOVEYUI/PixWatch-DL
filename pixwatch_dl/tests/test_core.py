@@ -55,9 +55,12 @@ def test_build_command_includes_archive_and_url(sample_config: Config) -> None:
     command = runner.build_command(sample_config.bookmarks_url)
     assert command[0] == sample_config.gallery_dl_path
     assert "--download-archive" in command
+    assert "--write-metadata" in command
+    # ``-d`` 与下载目录参数必须成对出现，确保写入指定目录。
+    assert "-d" in command
+    assert command[command.index("-d") + 1] == str(sample_config.download_directory)
     assert command[-1] == sample_config.bookmarks_url
     assert str(sample_config.archive_path) in command
-    assert str(sample_config.download_directory) in command
 
 
 def test_parse_stats_from_gallery_output(sample_config: Config) -> None:
