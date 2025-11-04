@@ -243,22 +243,6 @@ class GalleryDlRunner:
         )
         return completed.stdout or "", completed.stderr or "", completed.returncode
 
-    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
-        """终止长时间未退出的子进程。"""
-
-        try:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-        finally:
-            # ensure child is collected
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                pass
-
     def _parse_stats(self, stdout: str) -> GalleryStats:
         """解析 ``gallery-dl`` 的标准输出以统计下载数量。"""
 
