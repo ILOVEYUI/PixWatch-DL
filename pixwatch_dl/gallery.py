@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import subprocess
 import time
 import re
@@ -221,38 +222,25 @@ class GalleryDlRunner:
         if self.config.proxy:
             env["https_proxy"] = self.config.proxy
             env["http_proxy"] = self.config.proxy
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            encoding="utf-8",
-            errors="replace",
-            close_fds=True,
-        )
+        cmd_str = " ".join(shlex.quote(part) for part in command)
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+                env=env,
+            )
         except subprocess.TimeoutExpired as exc:
-            self._terminate_process(process)
+            self.logger.debug("gallery-dl cmd=%s timeout", cmd_str)
             raise TimeoutError("gallery-dl timed out") from exc
-        return stdout, stderr, process.returncode
-
-    def _terminate_process(self, process: subprocess.Popen[str]) -> None:
-        """终止长时间未退出的子进程。"""
-
-        try:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-        finally:
-            # ensure child is collected
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                pass
+        self.logger.debug(
+            "gallery-dl cmd=%s returncode=%s",
+            cmd_str,
+            completed.returncode,
+        )
+        return completed.stdout or "", completed.stderr or "", completed.returncode
 
     def _parse_stats(self, stdout: str) -> GalleryStats:
         """解析 ``gallery-dl`` 的标准输出以统计下载数量。"""
