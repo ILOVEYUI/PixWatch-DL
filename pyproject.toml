@@ -1,0 +1,27 @@
+# 项目基础元数据
+[project]
+name = "pixwatch-dl"
+version = "0.1.0"
+description = "Pixiv bookmark mirror using gallery-dl"
+authors = [{ name = "PixWatch Maintainers" }]
+readme = "README.md"
+requires-python = "~=3.11"
+dependencies = []
+
+# 暴露给终端用户的命令行入口（包含简易向导）
+[project.scripts]
+pixwatch-easy = "pixwatch_dl.easy_runner:main"
+
+# 可选依赖：本地开发或测试使用
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+# 构建工具配置
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# pytest 默认参数
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["pixwatch_dl/tests"]
