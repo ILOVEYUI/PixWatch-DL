@@ -15,7 +15,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import UnionType
-from typing import Dict, Optional, get_origin, get_args
+from typing import Dict, Optional, get_origin, get_args, get_type_hints
 
 import typing
 
@@ -158,12 +158,16 @@ def load_config() -> Config:
         if field_name not in merged:
             raise ValueError(f"Missing required configuration field '{field_name}'")
 
+    # `from __future__ import annotations` 会把类型注解延迟成字符串，因此这里
+    # 使用 `get_type_hints` 取得真实类型，确保后续转换能够识别 `Path` 等对象。
+    type_hints = get_type_hints(Config, include_extras=True)
+
     cast: Dict[str, object] = {}
     for field_name, field_def in Config.__dataclass_fields__.items():
         if field_name not in merged:
             continue
         value = merged[field_name]
-        field_type = field_def.type
+        field_type = type_hints.get(field_name, field_def.type)
         origin = get_origin(field_type)
         args = get_args(field_type)
         target_type = field_type
