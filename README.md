@@ -38,10 +38,23 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 2. **安装依赖**：`pip install -e .[dev]`（开发环境需 `pytest`）。
 
 3. **运行方式**：
+   - 简易向导：`pixwatch-easy`（见下方“简易运行向导”章节，适合不熟悉命令行的运维人员）。
    - 常驻模式：`python -m pixwatch_dl.main`
    - 单次任务：`python -m pixwatch_dl.once`
 
 首次运行会自动触发全量同步，之后每次只下载新增收藏。运行日志将打印到标准输出（JSON 格式），健康检查文件包含最近一次同步的状态与时间戳。
+
+## 简易运行向导
+
+为了方便不熟悉 Python 或命令行参数的运维人员，可以使用 `pixwatch-easy` 命令进入交互式向导：
+
+1. 在服务器安装好依赖后，执行 `pixwatch-easy`；
+2. 按提示依次填写 Pixiv 用户 ID、下载目录、归档文件、锁文件与健康检查文件路径，必要时可自动创建目录；
+3. 根据实际需求选择是否启用 Telegram 推送，并提供 Bot Token 与目标 Chat ID；
+4. 向导会生成一个最小可用的 TOML 配置文件（默认 `./pixwatch.toml`），随后询问是持续守护运行还是仅执行一次任务；
+5. 选择运行模式后，向导会自动设置环境变量并调用现有的守护/单次入口，执行完成后给出结果提示。
+
+整个过程不需要编写脚本或记忆复杂命令，适合在 Linux 服务器上快速部署。若需调整高级参数，可编辑生成的配置文件并重新运行向导。 
 
 ## 运维集成
 
@@ -63,6 +76,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 - `pixwatch_dl/once.py`：单次任务入口，适合 systemd timer 调度。
 - `pixwatch_dl/http_client.py`：简易 HTTP multipart 客户端，支持代理并供 Telegram 发送使用。
 - `pixwatch_dl/telegram.py`：封装持久队列、Telegram API 客户端与后台 Sender Worker，确保发送重试、速率控制与幂等。
+- `pixwatch_dl/easy_runner.py`：提供中文交互式向导，帮助非技术用户生成最小配置并选择守护或单次运行模式。
 - `pixwatch_dl/tests/test_core.py`：pytest 单测覆盖命令构建、回灌判定、锁与健康检查逻辑。
 
 ## 测试
@@ -73,4 +87,4 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 pytest
 ```
 
-测试覆盖命令构建、统计解析、回灌判定、文件锁与磁盘限额等关键逻辑。
+ 测试覆盖命令构建、统计解析、回灌判定、文件锁与磁盘限额等关键逻辑。
