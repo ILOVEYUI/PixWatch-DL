@@ -382,6 +382,7 @@ class TelegramMetrics:
         self.rate_limited = 0
         self.enqueued = 0
         self.last_sent: Optional[float] = None
+        self.skipped = 0
 
     def record_sent(self, count: int) -> None:
         """记录成功发送的数量并更新时间戳。"""
@@ -414,6 +415,12 @@ class TelegramMetrics:
         with self._lock:
             self.enqueued += count
 
+    def record_skipped(self, count: int) -> None:
+        """记录因超出尝试次数而主动跳过的数量。"""
+
+        with self._lock:
+            self.skipped += count
+
     def snapshot(self) -> Dict[str, object]:
         """返回当前指标快照。"""
 
@@ -425,6 +432,7 @@ class TelegramMetrics:
                 "tg_rate_limited": self.rate_limited,
                 "tg_enqueued": self.enqueued,
                 "tg_last_sent": self.last_sent,
+                "tg_skipped": self.skipped,
             }
 
 
@@ -541,6 +549,39 @@ class TelegramDispatcher:
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="telegram-sender", daemon=True)
 
+    def _partition_skippable(self, rows: Sequence[QueueRow]) -> tuple[list[QueueRow], list[QueueRow]]:
+        """区分需要跳过与可以继续重试的任务。"""
+
+        threshold = max(0, self.config.telegram_max_attempts)
+        if threshold <= 0:
+            return [], list(rows)
+        to_skip: list[QueueRow] = []
+        to_retry: list[QueueRow] = []
+        for row in rows:
+            next_attempt = row.attempts + 1
+            if next_attempt >= threshold:
+                to_skip.append(row)
+            else:
+                to_retry.append(row)
+        return to_skip, to_retry
+
+    def _mark_skipped(self, rows: Sequence[QueueRow], reason: str) -> None:
+        """将任务视为已发送并记录日志。"""
+
+        if not rows:
+            return
+        for row in rows:
+            LOGGER.warning(
+                "telegram skip after repeated failures",
+                extra={
+                    "file": str(row.file_path),
+                    "attempts": row.attempts,
+                    "reason": reason,
+                },
+            )
+        self.queue.mark_sent(rows)
+        self.metrics.record_skipped(len(rows))
+
     def start(self) -> None:
         """启动发送线程。"""
 
@@ -627,23 +668,39 @@ class TelegramDispatcher:
                 except TelegramFileTooLargeError as exc:
                     LOGGER.warning("telegram media group too large, falling back", extra={"group": batch.group_id, "error": str(exc)})
                     if self.config.telegram_document_fallback:
-                        self.queue.update_media_type(chunk, "document")
-                        self.queue.reschedule(chunk, self._next_delay(chunk[0].attempts + 1), str(exc))
-                        self.metrics.record_retry(len(chunk))
+                        to_skip, to_retry = self._partition_skippable(chunk)
+                        if to_skip:
+                            self._mark_skipped(to_skip, str(exc))
+                        if to_retry:
+                            self.queue.update_media_type(to_retry, "document")
+                            delay = self._next_delay(max(row.attempts for row in to_retry) + 1)
+                            self.queue.reschedule(to_retry, delay, str(exc))
+                            self.metrics.record_retry(len(to_retry))
                         return
                     self.queue.mark_failed(chunk, str(exc))
                     self.metrics.record_failed(len(chunk))
                     return
                 except TelegramRateLimitError as exc:
                     LOGGER.warning("telegram rate limited", extra={"group": batch.group_id, "retry_after": exc.retry_after})
-                    delay = (exc.retry_after or self.config.telegram_retry_backoff_initial) + self.config.telegram_rate_limit_padding_seconds
-                    self.queue.reschedule(chunk, delay, str(exc))
-                    self.metrics.record_rate_limit()
+                    to_skip, to_retry = self._partition_skippable(chunk)
+                    if to_skip:
+                        self._mark_skipped(to_skip, str(exc))
+                    if to_retry:
+                        delay = (exc.retry_after or self.config.telegram_retry_backoff_initial) + self.config.telegram_rate_limit_padding_seconds
+                        self.queue.reschedule(to_retry, delay, str(exc))
+                        self.metrics.record_rate_limit()
+                    else:
+                        self.metrics.record_rate_limit()
                     return
                 except TelegramRecoverableError as exc:
                     LOGGER.warning("telegram recoverable error", extra={"group": batch.group_id, "error": str(exc)})
-                    self.queue.reschedule(chunk, self._next_delay(chunk[0].attempts + 1), str(exc))
-                    self.metrics.record_retry(len(chunk))
+                    to_skip, to_retry = self._partition_skippable(chunk)
+                    if to_skip:
+                        self._mark_skipped(to_skip, str(exc))
+                    if to_retry:
+                        delay = self._next_delay(max(row.attempts for row in to_retry) + 1)
+                        self.queue.reschedule(to_retry, delay, str(exc))
+                        self.metrics.record_retry(len(to_retry))
                     return
                 except TelegramFatalError as exc:
                     LOGGER.error("telegram fatal error", extra={"group": batch.group_id, "error": str(exc)})
@@ -660,22 +717,43 @@ class TelegramDispatcher:
                     except TelegramFileTooLargeError as exc:
                         LOGGER.warning("telegram file too large", extra={"file": str(row.file_path)})
                         if self.config.telegram_document_fallback and row.media_type != "document":
-                            self.queue.update_media_type([row], "document")
-                            self.queue.reschedule([row], self._next_delay(row.attempts + 1), str(exc))
+                            to_skip, to_retry = self._partition_skippable([row])
+                            if to_skip:
+                                self._mark_skipped(to_skip, str(exc))
+                                continue
+                            if not to_retry:
+                                continue
+                            self.queue.update_media_type(to_retry, "document")
+                            delay = self._next_delay(max(r.attempts for r in to_retry) + 1)
+                            self.queue.reschedule(to_retry, delay, str(exc))
+                            self.metrics.record_retry(len(to_retry))
                         else:
                             self.queue.mark_failed([row], str(exc))
                             self.metrics.record_failed(1)
                         continue
                     except TelegramRateLimitError as exc:
                         LOGGER.warning("telegram rate limited", extra={"file": str(row.file_path), "retry_after": exc.retry_after})
+                        to_skip, to_retry = self._partition_skippable([row])
+                        if to_skip:
+                            self._mark_skipped(to_skip, str(exc))
+                            continue
+                        if not to_retry:
+                            continue
                         delay = (exc.retry_after or self.config.telegram_retry_backoff_initial) + self.config.telegram_rate_limit_padding_seconds
-                        self.queue.reschedule([row], delay, str(exc))
+                        self.queue.reschedule(to_retry, delay, str(exc))
                         self.metrics.record_rate_limit()
                         return
                     except TelegramRecoverableError as exc:
                         LOGGER.warning("telegram recoverable error", extra={"file": str(row.file_path), "error": str(exc)})
-                        self.queue.reschedule([row], self._next_delay(row.attempts + 1), str(exc))
-                        self.metrics.record_retry()
+                        to_skip, to_retry = self._partition_skippable([row])
+                        if to_skip:
+                            self._mark_skipped(to_skip, str(exc))
+                            continue
+                        if not to_retry:
+                            continue
+                        delay = self._next_delay(max(r.attempts for r in to_retry) + 1)
+                        self.queue.reschedule(to_retry, delay, str(exc))
+                        self.metrics.record_retry(len(to_retry))
                         continue
                     except TelegramFatalError as exc:
                         LOGGER.error("telegram fatal error", extra={"file": str(row.file_path), "error": str(exc)})

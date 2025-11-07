@@ -19,6 +19,7 @@ from typing import Callable
 
 from . import main as daemon_main
 from . import once as once_main
+from . import limited as limited_main
 
 
 def _prompt(text: str, *, validator: Callable[[str], bool], error_message: str) -> str:
@@ -46,6 +47,16 @@ def _prompt_int(text: str) -> int:
             return int(raw)
         except ValueError:
             print("请输入数字。")
+
+
+def _prompt_positive_int(text: str) -> int:
+    """获取大于 0 的整数，适用于限量模式参数。"""
+
+    while True:
+        value = _prompt_int(text)
+        if value > 0:
+            return value
+        print("请输入大于 0 的数字。")
 
 
 def _ensure_directory(path: Path) -> None:
@@ -145,22 +156,29 @@ def _choose_action() -> str:
     print("\n=== 运行模式 ===")
     print("1. 持续守护运行（每 10 分钟同步一次）")
     print("2. 仅执行一次同步（适合定时任务测试）")
+    print("3. 限量守护模式（每轮仅扫描前 Y 条收藏）")
     print("0. 退出")
     while True:
         choice = input("请选择：").strip()
-        if choice in {"0", "1", "2"}:
+        if choice in {"0", "1", "2", "3"}:
             return choice
-        print("请输入 0、1 或 2。")
+        print("请输入 0、1、2 或 3。")
 
 
-def _run_with_config(config_path: Path, choice: str) -> int:
+def _run_with_config(config_path: Path, choice: str, limited_params: tuple[int, int] | None = None) -> int:
     """根据用户选择调用具体的执行入口。"""
 
     os.environ["PIXWATCH_CONFIG_FILE"] = str(config_path)
+    if limited_params is not None:
+        interval_minutes, limit = limited_params
+        os.environ["PIXWATCH_LIMITED_POLL_INTERVAL_SECONDS"] = str(interval_minutes * 60)
+        os.environ["PIXWATCH_LIMITED_BOOKMARK_LIMIT"] = str(limit)
     if choice == "1":
         return daemon_main.main()
     if choice == "2":
         return once_main.main()
+    if choice == "3":
+        return limited_main.main()
     return 0
 
 
@@ -188,8 +206,15 @@ def main() -> int:
         print("已取消执行。")
         return 0
 
+    limited_params: tuple[int, int] | None = None
+    if choice == "3":
+        print("\n=== 限量模式参数 ===")
+        interval_minutes = _prompt_positive_int("请输入轮询间隔（分钟）：")
+        limit = _prompt_positive_int("请输入每轮扫描的收藏数量上限：")
+        limited_params = (interval_minutes, limit)
+
     try:
-        exit_code = _run_with_config(config_path, choice)
+        exit_code = _run_with_config(config_path, choice, limited_params)
     except KeyboardInterrupt:
         print("\n已收到中断信号，正在退出。")
         return 1

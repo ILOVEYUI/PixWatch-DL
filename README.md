@@ -9,7 +9,8 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 - **稳健性**：文件锁避免重入，执行超时会强制终止子进程。网络异常（含 429、超时等）自动指数退避最多 3 次。
 - **资源守护**：在检测到磁盘剩余空间低于阈值时跳过本轮并输出告警日志。
 - **观测性**：结构化 JSON 日志包含阶段、耗时、重试次数及新增/跳过/失败统计。最近一次任务状态写入健康检查文件，可供外部探针读取。
-- **Telegram 推送**：所有新增下载写入持久队列，由后台 Sender Worker 发送至指定聊天，支持媒体组合并、限流退避、文档降级与发送幂等。
+- **限量模式**：可选守护进程仅巡检最新收藏前 `Y` 条，并以自定义间隔运行，适合带宽或 API 配额有限的场景。
+- **Telegram 推送**：所有新增下载写入持久队列，由后台 Sender Worker 发送至指定聊天，支持媒体组合并、限流退避、文档降级、发送幂等，并在连续失败达到阈值后自动跳过。
 
 ## 安装与运行
 
@@ -25,6 +26,8 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
      - `concurrency`、`sleep`、`sleep_request`、`retries`：控制 `gallery-dl` 并发与限速。
      - `timeout_seconds`、`max_run_seconds`：单次任务与整体周期的最长运行时间。
      - `poll_interval_seconds`：增量同步间隔（默认 600 秒）。
+     - `limited_poll_interval_seconds`（可选）：限量守护模式的轮询间隔，未配置时沿用 `poll_interval_seconds`。
+     - `limited_bookmark_limit`（可选）：限量模式每轮仅扫描的收藏数量上限。
      - `disk_free_threshold_bytes`：磁盘剩余空间阈值，低于则跳过。
      - `backoff_initial_seconds`、`backoff_multiplier`、`backoff_max_seconds`：网络退避策略。
      - `proxy`（可选）：HTTP/HTTPS 代理地址。
@@ -32,7 +35,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
      - `telegram_bot_token`、`telegram_chat_ids`（可选）：启用 Telegram 推送所需的 Bot Token 与目标 Chat ID（可多值，空格/逗号分隔）。
      - `telegram_queue_path`（可选）：Telegram 发送队列 SQLite 文件路径；未配置时默认放置于下载目录。
      - `telegram_caption_template`、`telegram_caption_max_length`、`telegram_include_tags`：自定义消息模板、长度上限与标签附加策略。
-     - `telegram_send_media_group`、`telegram_worker_poll_seconds`、`telegram_max_attempts`、`telegram_retry_backoff_*`：发送批量策略、轮询频率与退避参数。
+     - `telegram_send_media_group`、`telegram_worker_poll_seconds`、`telegram_max_attempts`、`telegram_retry_backoff_*`：发送批量策略、轮询频率与退避参数；当单个任务连续失败次数达到 `telegram_max_attempts` 时会自动跳过并记为已发送。
      - `telegram_document_fallback`、`telegram_disable_notifications`、`telegram_proxy`：文档降级、通知开关与独立代理配置。
 
 2. **安装依赖**：`pip install -e .[dev]`（开发环境需 `pytest`）。
@@ -41,6 +44,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
    - 简易向导：`pixwatch-easy`（见下方“简易运行向导”章节，适合不熟悉命令行的运维人员）。
    - 常驻模式：`python -m pixwatch_dl.main`
    - 单次任务：`python -m pixwatch_dl.once`
+   - 限量守护模式：`python -m pixwatch_dl.limited`（使用 `limited_bookmark_limit` 和 `limited_poll_interval_seconds` 控制范围与频率）
 
 首次运行会自动触发全量同步，之后每次只下载新增收藏。运行日志将打印到标准输出（JSON 格式），健康检查文件包含最近一次同步的状态与时间戳。
 
@@ -52,7 +56,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 2. 按提示依次填写 Pixiv 用户 ID、下载目录、归档文件、锁文件与健康检查文件路径，必要时可自动创建目录；
 3. 根据实际需求选择是否启用 Telegram 推送，并提供 Bot Token 与目标 Chat ID；
 4. 向导会生成一个最小可用的 TOML 配置文件（默认 `./pixwatch.toml`），随后询问是持续守护运行还是仅执行一次任务；
-5. 选择运行模式后，向导会自动设置环境变量并调用现有的守护/单次入口，执行完成后给出结果提示。
+5. 选择运行模式后，向导会自动设置环境变量并调用现有的守护/单次/限量入口，若选择限量模式会额外提示输入轮询间隔（分钟）与每轮扫描数量。
 
 整个过程不需要编写脚本或记忆复杂命令，适合在 Linux 服务器上快速部署。若需调整高级参数，可编辑生成的配置文件并重新运行向导。 
 
@@ -60,7 +64,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 
 - **systemd**：提供一个 `.service` 与 `.timer` 单元（需自行创建文件并指向 `python -m pixwatch_dl.once`）。关键字段：服务需定义 `WorkingDirectory`、`Environment`（或 `EnvironmentFile`）加载配置，定时器设定 `OnBootSec=10min`、`OnUnitActiveSec=10min` 保证 10 分钟巡检。确保 `RequiresMountsFor` 覆盖下载目录所在挂载点。
 - **容器化（可选）**：如需容器部署，可自建 `Dockerfile`，要求将配置文件与 OAuth 凭据挂载为只读卷，并在容器入口执行 `python -m pixwatch_dl.main`。
-- **健康检查**：读取配置中 `health_path` 指向的 JSON 文件获取 `status`、`timestamp`、`added`、`skipped`、`failed` 等字段，可由外部监控系统或 `/health` 静态探针读取。启用 Telegram 后会额外暴露 `tg_queue`、`tg_sent`、`tg_failed`、`tg_retries`、`tg_rate_limited`、`tg_last_sent` 指标。
+- **健康检查**：读取配置中 `health_path` 指向的 JSON 文件获取 `status`、`timestamp`、`added`、`skipped`、`failed` 等字段，可由外部监控系统或 `/health` 静态探针读取。启用 Telegram 后会额外暴露 `tg_queue`、`tg_sent`、`tg_failed`、`tg_retries`、`tg_rate_limited`、`tg_skipped`、`tg_last_sent` 指标。
 
 ## 项目结构
 
@@ -73,6 +77,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 - `pixwatch_dl/backfill.py`：在归档缺失时执行公共收藏全量回灌流程。
 - `pixwatch_dl/poller.py`：实现文件锁、磁盘阈值检测、健康状态写入与增量同步调度，并在成功下载后入队 Telegram 推送任务。
 - `pixwatch_dl/main.py`：常驻守护入口，负责初始化并循环执行轮询任务。
+- `pixwatch_dl/limited.py`：限量守护入口，只扫描最新的前 `Y` 条收藏并按自定义间隔运行。
 - `pixwatch_dl/once.py`：单次任务入口，适合 systemd timer 调度。
 - `pixwatch_dl/http_client.py`：简易 HTTP multipart 客户端，支持代理并供 Telegram 发送使用。
 - `pixwatch_dl/telegram.py`：封装持久队列、Telegram API 客户端与后台 Sender Worker，确保发送重试、速率控制与幂等。

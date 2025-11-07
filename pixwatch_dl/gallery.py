@@ -113,6 +113,8 @@ class GalleryDlRunner:
             str(self.config.sleep_request),
             "--retries",
             str(self.config.retries),
+            "-j",
+            str(self.config.concurrency),
         ]
         command.extend(self.config.extra_gallery_args)
         if extra:

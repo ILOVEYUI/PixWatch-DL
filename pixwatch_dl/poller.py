@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Dict, Optional, TextIO
+from typing import Dict, Iterable, Optional, TextIO
 
 import fcntl
 import shutil
@@ -88,16 +88,34 @@ class Poller:
 
         return self._run_cycle(phase="periodic")
 
-    def _run_cycle(self, *, phase: str) -> CycleOutcome:
+    def run_limited_cycle(self, limit: int) -> CycleOutcome:
+        """执行限量同步周期，仅扫描指定数量的收藏。"""
+
+        extra: Optional[Iterable[str]] = None
+        context: Dict[str, object] = {"limit": max(0, limit)}
+        if limit > 0:
+            extra = ["--range", f"1-{limit}"]
+        return self._run_cycle(phase="limited", extra=extra, context=context)
+
+    def _run_cycle(
+        self,
+        *,
+        phase: str,
+        extra: Optional[Iterable[str]] = None,
+        context: Optional[Dict[str, object]] = None,
+    ) -> CycleOutcome:
         """执行具体的下载逻辑，并处理异常、写入健康状态。"""
 
         start = time.monotonic()
+        log_context: Dict[str, object] = {"phase": phase, "url": self.config.bookmarks_url}
+        if context:
+            log_context.update(context)
         try:
             with self.lock:
                 if not self._has_disk_capacity():
                     self.logger.warning(
                         "insufficient disk space, skipping",
-                        extra={"phase": phase, "reason": "disk_low"},
+                        extra={**log_context, "reason": "disk_low"},
                     )
                     record = HealthRecord(
                         phase=phase,
@@ -114,20 +132,16 @@ class Poller:
                     record.telegram = metrics
                     self._write_health(record, metrics)
                     return CycleOutcome(status="skipped", result=None)
-                self.logger.info("starting gallery sync", extra={"phase": phase, "url": self.config.bookmarks_url})
-                result = self.runner.run(self.config.bookmarks_url)
+                self.logger.info("starting gallery sync", extra=log_context)
+                result = self.runner.run(self.config.bookmarks_url, extra=extra)
         except BlockingIOError:
-            self.logger.info("previous run still active, skipping", extra={"phase": phase})
+            self.logger.info("previous run still active, skipping", extra=log_context)
             return CycleOutcome(status="skipped", result=None)
         except GalleryDlError as exc:
             duration = time.monotonic() - start
             self.logger.error(
                 "gallery-dl failed",
-                extra={
-                    "phase": phase,
-                    "duration": duration,
-                    "error": str(exc),
-                },
+                extra={**log_context, "duration": duration, "error": str(exc)},
             )
             record = HealthRecord(
                 phase=phase,
@@ -148,7 +162,7 @@ class Poller:
             self.logger.info(
                 "gallery sync completed",
                 extra={
-                    "phase": phase,
+                    **log_context,
                     "exit_code": result.exit_code,
                     "duration": result.duration,
                     "added": result.stats.added,
@@ -192,6 +206,17 @@ class Poller:
             self.run_periodic_cycle()
             elapsed = time.monotonic() - cycle_start
             remaining = max(0, self.config.poll_interval_seconds - elapsed)
+            stop_event.wait(remaining)
+
+    def run_limited_forever(self, stop_event: Event, *, interval: float, limit: int) -> None:
+        """限量守护模式主循环。"""
+
+        interval = max(interval, 0)
+        while not stop_event.is_set():
+            cycle_start = time.monotonic()
+            self.run_limited_cycle(limit)
+            elapsed = time.monotonic() - cycle_start
+            remaining = max(0, interval - elapsed)
             stop_event.wait(remaining)
 
     def _has_disk_capacity(self) -> bool:

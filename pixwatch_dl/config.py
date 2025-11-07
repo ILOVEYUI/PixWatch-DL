@@ -49,13 +49,15 @@ class Config:
     - ``concurrency``、``sleep``、``sleep_request``、``retries``：控制 gallery-dl 的并发、限速与重试参数；
     - ``timeout_seconds``：单次 gallery-dl 调用的超时时间；
     - ``poll_interval_seconds``：常驻模式下的轮询间隔；
+    - ``limited_poll_interval_seconds``：限量守护模式的轮询间隔（秒，默认沿用 ``poll_interval_seconds``）；
+    - ``limited_bookmark_limit``：限量模式每轮仅扫描的收藏数量上限；
     - ``max_run_seconds``：一次轮询可执行的最大时长，超过则超时终止；
     - ``max_attempts``：单轮指数退避重试次数；
     - ``disk_free_threshold_bytes``：磁盘剩余空间低于该值时跳过任务；
     - ``backoff_initial_seconds``、``backoff_multiplier``、``backoff_max_seconds``：网络错误重试的退避策略；
     - ``proxy``：为 gallery-dl 设置的代理地址（可选）；
     - ``extra_gallery_args``：附加给 gallery-dl 的命令行参数元组；
-    - ``telegram_*``：Telegram 发送相关配置，覆盖启用开关、机器人凭据、队列路径、文案模板及重试策略。
+    - ``telegram_*``：Telegram 发送相关配置，覆盖启用开关、机器人凭据、队列路径、文案模板、重试策略以及重复失败后的自动跳过阈值。
     """
 
     user_id: int
@@ -71,6 +73,8 @@ class Config:
     retries: int = 5
     timeout_seconds: int = 1200
     poll_interval_seconds: int = 600
+    limited_poll_interval_seconds: Optional[int] = None
+    limited_bookmark_limit: Optional[int] = None
     max_run_seconds: int = 900
     max_attempts: int = 3
     disk_free_threshold_bytes: int = 10 * 1024 * 1024 * 1024
