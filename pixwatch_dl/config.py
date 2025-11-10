@@ -46,7 +46,7 @@ class Config:
     - ``health_path``：写入健康检查 JSON 的路径；
     - ``log_level``：日志级别；
     - ``gallery_dl_path``：可执行文件路径，允许自定义安装位置；
-    - ``concurrency``、``sleep``、``sleep_request``、``retries``：控制 gallery-dl 的并发、限速与重试参数；
+    - ``sleep``、``sleep_request``、``retries``：控制 gallery-dl 的节流与重试参数；
     - ``timeout_seconds``：单次 gallery-dl 调用的超时时间；
     - ``poll_interval_seconds``：常驻模式下的轮询间隔；
     - ``limited_poll_interval_seconds``：限量守护模式的轮询间隔（秒，默认沿用 ``poll_interval_seconds``）；
@@ -67,7 +67,7 @@ class Config:
     health_path: Path
     log_level: str = "INFO"
     gallery_dl_path: str = "gallery-dl"
-    concurrency: int = 2
+    concurrency: int = 2  # 兼容旧版配置字段，目前不直接传递给 gallery-dl，可通过 extra_gallery_args 自行指定并发相关参数。
     sleep: float = 1.5
     sleep_request: float = 1.0
     retries: int = 5

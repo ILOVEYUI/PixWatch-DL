@@ -23,7 +23,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
      - `lock_path`：互斥锁文件路径。
      - `health_path`：健康检查状态文件路径。
      - `gallery_dl_path`（可选）：`gallery-dl` 可执行程序。
-     - `concurrency`、`sleep`、`sleep_request`、`retries`：控制 `gallery-dl` 并发与限速。
+    - `sleep`、`sleep_request`、`retries`：控制 `gallery-dl` 的节流与重试；如需自定义并发策略，请通过 `extra_gallery_args` 传入官方支持的参数或自建多进程。
      - `timeout_seconds`、`max_run_seconds`：单次任务与整体周期的最长运行时间。
      - `poll_interval_seconds`：增量同步间隔（默认 600 秒）。
      - `limited_poll_interval_seconds`（可选）：限量守护模式的轮询间隔，未配置时沿用 `poll_interval_seconds`。
