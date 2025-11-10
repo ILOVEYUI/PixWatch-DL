@@ -156,7 +156,7 @@ def test_poller_limited_cycle_uses_range(sample_config: Config) -> None:
 
     outcome = poller.run_limited_cycle(5)
     assert outcome.status == "success"
-    assert runner.last_kwargs.get("extra") == ["--range", "1-5"]
+    assert runner.last_kwargs.get("extra") == ["--range", ":5"]
 
 def test_poller_disk_guard(sample_config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
     runner = DummyRunner(

@@ -94,7 +94,11 @@ class Poller:
         extra: Optional[Iterable[str]] = None
         context: Dict[str, object] = {"limit": max(0, limit)}
         if limit > 0:
-            extra = ["--range", f"1-{limit}"]
+            # gallery-dl 的 ``--range`` 参数遵循 Python 切片语法 ``start:end``，
+            # 因此要获取最新的前 ``limit`` 条收藏，需要传入 ``":{limit}"``。
+            # 之前的 ``1-{limit}`` 写法会被解析为非法区间并导致进程以 2 退出，
+            # 实际下载没有执行。这里改用切片形式即可兼容官方语义。
+            extra = ["--range", f":{limit}"]
         return self._run_cycle(phase="limited", extra=extra, context=context)
 
     def _run_cycle(
