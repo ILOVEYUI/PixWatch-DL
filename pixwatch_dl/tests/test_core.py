@@ -65,6 +65,7 @@ def test_build_command_includes_archive_and_url(sample_config: Config) -> None:
     assert "-d" in command
     assert command[command.index("-d") + 1] == str(sample_config.download_directory)
     assert command[-1] == sample_config.bookmarks_url
+    assert command[-2] == "--"
     assert str(sample_config.archive_path) in command
 
 
