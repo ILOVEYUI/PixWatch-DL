@@ -833,7 +833,14 @@ class TelegramDispatcher:
         if self.config.telegram_include_tags:
             tags = metadata.get("tags") or []
             if tags:
-                tags_text = ", ".join(str(tag) for tag in tags[:10])
+                # 需要在每个标签前加上井号，若原本已有井号则避免重复添加，同时去掉多余空白。
+                formatted_tags = []
+                for tag in tags[:10]:
+                    cleaned = str(tag).strip()
+                    if not cleaned:
+                        continue
+                    formatted_tags.append(f"#{cleaned.lstrip('#')}")
+                tags_text = ", ".join(formatted_tags)
                 caption = f"{caption}\nTags: {tags_text}" if caption else f"Tags: {tags_text}"
         max_len = max(1, self.config.telegram_caption_max_length)
         if len(caption) > max_len:
