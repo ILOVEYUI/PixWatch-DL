@@ -119,10 +119,6 @@ class GalleryDlRunner:
         command.extend(self.config.extra_gallery_args)
         if extra:
             command.extend(extra)
-        # ``argparse`` 在解析 ``gallery-dl`` 的 CLI 时允许使用 ``--`` 显式结束选项段。
-        # 这里提前补上一段 ``--``，可以避免某些旧版本在带有自定义参数时把 URL 误判为
-        # 额外选项，导致 ``unrecognized arguments`` 错误。
-        command.append("--")
         command.append(url)
         return command
 
