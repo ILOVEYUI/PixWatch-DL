@@ -293,3 +293,85 @@ def test_telegram_skip_after_attempts(tmp_path: Path) -> None:
     assert snapshot["tg_skipped"] == 1
 
     dispatcher.shutdown(wait=False)
+
+
+def test_telegram_media_group_missing_file(tmp_path: Path) -> None:
+    download_dir = tmp_path / "downloads"
+    download_dir.mkdir()
+    media_missing = download_dir / "missing.jpg"
+    media_missing.write_bytes(b"data")
+    media_ok = download_dir / "exists.jpg"
+    media_ok.write_bytes(b"data")
+    archive = tmp_path / "archive.txt"
+    lock = tmp_path / "lock"
+    health = tmp_path / "health.json"
+    queue_path = tmp_path / "queue.sqlite"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+
+    config = Config(
+        user_id=456,
+        download_directory=download_dir,
+        archive_path=archive,
+        lock_path=lock,
+        health_path=health,
+        telegram_enabled=True,
+        telegram_bot_token="dummy",
+        telegram_chat_ids=("123",),
+        telegram_queue_path=queue_path,
+        telegram_retry_backoff_initial=0.0,
+        telegram_retry_backoff_multiplier=1.0,
+        telegram_retry_backoff_max=0.0,
+    )
+
+    dispatcher = TelegramDispatcher(config)
+
+    class DummyAPI:
+        def send_media_group(self, chat_id: str, rows, *, disable_notifications: bool) -> None:
+            for row in rows:
+                row.file_path.read_bytes()
+
+        def send_single(self, row, disable_notifications: bool) -> None:
+            row.file_path.read_bytes()
+
+        def close(self) -> None:
+            return None
+
+    dispatcher.api = DummyAPI()  # type: ignore[assignment]
+
+    tasks = [
+        QueueTask(
+            chat_id="123",
+            file_path=media_missing,
+            media_type="photo",
+            caption="",
+            work_id="w1",
+            page=0,
+            metadata={"work_id": "w1"},
+            group_id="123:w1",
+        ),
+        QueueTask(
+            chat_id="123",
+            file_path=media_ok,
+            media_type="photo",
+            caption="",
+            work_id="w1",
+            page=1,
+            metadata={"work_id": "w1"},
+            group_id="123:w1",
+        ),
+    ]
+    inserted = dispatcher.queue.enqueue(tasks)
+    assert inserted == 2
+
+    media_missing.unlink()
+
+    batch = dispatcher.queue.fetch_next_batch()
+    assert batch is not None
+    dispatcher._process_batch(batch)
+
+    assert dispatcher.queue.pending_count() == 0
+    snapshot = dispatcher.metrics.snapshot()
+    assert snapshot["tg_failed"] == 1
+    assert snapshot["tg_sent"] == 1
+
+    dispatcher.shutdown(wait=False)

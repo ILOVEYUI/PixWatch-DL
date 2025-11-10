@@ -707,6 +707,18 @@ class TelegramDispatcher:
                     self.queue.mark_failed(chunk, str(exc))
                     self.metrics.record_failed(len(chunk))
                     return
+                except FileNotFoundError:
+                    missing = [row for row in chunk if not row.file_path.exists()]
+                    if not missing:
+                        missing = list(chunk)
+                    LOGGER.error(
+                        "media file missing for telegram",
+                        extra={"files": [str(row.file_path) for row in missing]},
+                    )
+                    self.queue.mark_failed(missing, "file missing")
+                    self.metrics.record_failed(len(missing))
+                    remaining = [row for row in chunk if row not in missing] + remaining
+                    continue
                 else:
                     self.queue.mark_sent(chunk)
                     self.metrics.record_sent(len(chunk))
