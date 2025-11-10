@@ -62,6 +62,7 @@ class HealthRecord:
     duration: float
     timestamp: float
     telegram: Optional[Dict[str, object]] = None
+    error: Optional[str] = None
 
 
 @dataclass
@@ -98,7 +99,9 @@ class Poller:
             # 因此要获取最新的前 ``limit`` 条收藏，需要传入 ``":{limit}"``。
             # 之前的 ``1-{limit}`` 写法会被解析为非法区间并导致进程以 2 退出，
             # 实际下载没有执行。这里改用切片形式即可兼容官方语义。
-            extra = ["--range", f":{limit}"]
+            range_arg = f":{limit}"
+            context["range"] = range_arg
+            extra = ["--range", range_arg]
         return self._run_cycle(phase="limited", extra=extra, context=context)
 
     def _run_cycle(
@@ -143,9 +146,10 @@ class Poller:
             return CycleOutcome(status="skipped", result=None)
         except GalleryDlError as exc:
             duration = time.monotonic() - start
+            error_text = self._truncate_error(str(exc))
             self.logger.error(
                 "gallery-dl failed",
-                extra={**log_context, "duration": duration, "error": str(exc)},
+                extra={**log_context, "duration": duration, "error": error_text},
             )
             record = HealthRecord(
                 phase=phase,
@@ -157,27 +161,33 @@ class Poller:
                 attempts=getattr(exc, "attempts", 0),
                 duration=duration,
                 timestamp=time.time(),
+                error=error_text,
             )
             metrics = self._telegram_metrics()
             record.telegram = metrics
             self._write_health(record, metrics)
             return CycleOutcome(status="failed", result=None)
         else:
-            self.logger.info(
-                "gallery sync completed",
-                extra={
-                    **log_context,
-                    "exit_code": result.exit_code,
-                    "duration": result.duration,
-                    "added": result.stats.added,
-                    "skipped": result.stats.skipped,
-                    "failed": result.stats.failed,
-                    "attempts": result.attempts,
-                },
-            )
+            log_extra = {
+                **log_context,
+                "exit_code": result.exit_code,
+                "duration": result.duration,
+                "added": result.stats.added,
+                "skipped": result.stats.skipped,
+                "failed": result.stats.failed,
+                "attempts": result.attempts,
+            }
+            status = "success" if result.exit_code == 0 else "failed"
+            if result.exit_code != 0:
+                error_text = self._truncate_error(result.stderr)
+                if error_text:
+                    log_extra["error"] = error_text
+                self.logger.error("gallery sync failed", extra=log_extra)
+            else:
+                self.logger.info("gallery sync completed", extra=log_extra)
             record = HealthRecord(
                 phase=phase,
-                status="success" if result.exit_code == 0 else "failed",
+                status=status,
                 exit_code=result.exit_code,
                 added=result.stats.added,
                 skipped=result.stats.skipped,
@@ -185,6 +195,7 @@ class Poller:
                 attempts=result.attempts,
                 duration=result.duration,
                 timestamp=time.time(),
+                error=self._truncate_error(result.stderr) if result.exit_code != 0 else None,
             )
             enqueued = 0
             if self.dispatcher and result.exit_code == 0 and result.downloads:
@@ -243,12 +254,25 @@ class Poller:
             "duration": record.duration,
             "timestamp": record.timestamp,
         }
+        if record.error:
+            payload["error"] = record.error
         if metrics:
             payload.update(metrics)
         tmp_path = self.config.health_path.with_suffix(".tmp")
         with tmp_path.open("w", encoding="utf-8") as fh:
             json.dump(payload, fh)
         tmp_path.replace(self.config.health_path)
+
+    @staticmethod
+    def _truncate_error(message: Optional[str], limit: int = 500) -> Optional[str]:
+        """裁剪错误文本，避免写入超长信息。"""
+
+        if not message:
+            return None
+        text = message.strip()
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3] + "..."
 
     def _telegram_metrics(self) -> Optional[Dict[str, object]]:
         """从 Telegram dispatcher 获取指标快照，失败时记录错误并返回 ``None``。"""

@@ -141,6 +141,28 @@ def test_poller_records_success(sample_config: Config, monkeypatch: pytest.Monke
     assert payload["added"] == 1
 
 
+def test_poller_records_failure(sample_config: Config) -> None:
+    result = GalleryResult(
+        url="http://example.com",
+        exit_code=2,
+        duration=1.0,
+        attempts=1,
+        stdout="",
+        stderr="Invalid range provided",
+        stats=GalleryStats(added=0, skipped=0, failed=0),
+    )
+    runner = DummyRunner(result)
+    poller = Poller(sample_config, runner)  # type: ignore[arg-type]
+
+    outcome = poller.run_periodic_cycle()
+    assert outcome.status == "failed"
+    with sample_config.health_path.open() as fh:
+        payload = json.load(fh)
+    assert payload["status"] == "failed"
+    assert payload["exit_code"] == 2
+    assert payload["error"] == "Invalid range provided"
+
+
 def test_poller_limited_cycle_uses_range(sample_config: Config) -> None:
     result = GalleryResult(
         url="http://example.com",

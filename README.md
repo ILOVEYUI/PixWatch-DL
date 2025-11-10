@@ -8,7 +8,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 - **幂等与防重复**：所有 `gallery-dl` 任务共享同一归档文件，并保留 `.part` 临时文件以支持断点续传。
 - **稳健性**：文件锁避免重入，执行超时会强制终止子进程。网络异常（含 429、超时等）自动指数退避最多 3 次。
 - **资源守护**：在检测到磁盘剩余空间低于阈值时跳过本轮并输出告警日志。
-- **观测性**：结构化 JSON 日志包含阶段、耗时、重试次数及新增/跳过/失败统计。最近一次任务状态写入健康检查文件，可供外部探针读取。
+- **观测性**：结构化 JSON 日志包含阶段、耗时、重试次数及新增/跳过/失败统计。最近一次任务状态写入健康检查文件，可供外部探针读取；当执行失败时会额外写入 `error` 字段，便于快速定位 `gallery-dl` 报错原因。
 - **限量模式**：可选守护进程仅巡检最新收藏前 `Y` 条，并以自定义间隔运行，适合带宽或 API 配额有限的场景。
 - **Telegram 推送**：所有新增下载写入持久队列，由后台 Sender Worker 发送至指定聊天，支持媒体组合并、限流退避、文档降级、发送幂等，并在连续失败达到阈值后自动跳过。
 
@@ -44,7 +44,8 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
    - 简易向导：`pixwatch-easy`（见下方“简易运行向导”章节，适合不熟悉命令行的运维人员）。
    - 常驻模式：`python -m pixwatch_dl.main`
    - 单次任务：`python -m pixwatch_dl.once`
-   - 限量守护模式：`python -m pixwatch_dl.limited`（使用 `limited_bookmark_limit` 和 `limited_poll_interval_seconds` 控制范围与频率）
+  - 限量守护模式：`python -m pixwatch_dl.limited`（使用 `limited_bookmark_limit` 和 `limited_poll_interval_seconds` 控制范围与频率）。
+    - 该模式会将 `limited_bookmark_limit` 转换成 `--range :<limit>` 传给 `gallery-dl`。如果看到日志/健康文件里的 `exit_code = 2` 且没有新增下载，请确认升级到当前版本（旧实现曾使用 `1-<limit>` 导致 gallery-dl 立即退出），或手动运行 `gallery-dl --range :<limit> <bookmarks_url>` 验证凭据与网络是否正常。
 
 首次运行会自动触发全量同步，之后每次只下载新增收藏。运行日志将打印到标准输出（JSON 格式），健康检查文件包含最近一次同步的状态与时间戳。
 
@@ -57,6 +58,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 3. 根据实际需求选择是否启用 Telegram 推送，并提供 Bot Token 与目标 Chat ID；
 4. 向导会生成一个最小可用的 TOML 配置文件（默认 `./pixwatch.toml`），随后询问是持续守护运行还是仅执行一次任务；
 5. 选择运行模式后，向导会自动设置环境变量并调用现有的守护/单次/限量入口，若选择限量模式会额外提示输入轮询间隔（分钟）与每轮扫描数量。
+6. 需要查看更多诊断信息时，可在生成的配置文件内设置 `log_level = "DEBUG"`，或在运行命令前导出 `PIXWATCH_LOG_LEVEL=DEBUG` 环境变量，以获取完整命令与返回码日志。
 
 整个过程不需要编写脚本或记忆复杂命令，适合在 Linux 服务器上快速部署。若需调整高级参数，可编辑生成的配置文件并重新运行向导。 
 
@@ -64,7 +66,7 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
 
 - **systemd**：提供一个 `.service` 与 `.timer` 单元（需自行创建文件并指向 `python -m pixwatch_dl.once`）。关键字段：服务需定义 `WorkingDirectory`、`Environment`（或 `EnvironmentFile`）加载配置，定时器设定 `OnBootSec=10min`、`OnUnitActiveSec=10min` 保证 10 分钟巡检。确保 `RequiresMountsFor` 覆盖下载目录所在挂载点。
 - **容器化（可选）**：如需容器部署，可自建 `Dockerfile`，要求将配置文件与 OAuth 凭据挂载为只读卷，并在容器入口执行 `python -m pixwatch_dl.main`。
-- **健康检查**：读取配置中 `health_path` 指向的 JSON 文件获取 `status`、`timestamp`、`added`、`skipped`、`failed` 等字段，可由外部监控系统或 `/health` 静态探针读取。启用 Telegram 后会额外暴露 `tg_queue`、`tg_sent`、`tg_failed`、`tg_retries`、`tg_rate_limited`、`tg_skipped`、`tg_last_sent` 指标。
+- **健康检查**：读取配置中 `health_path` 指向的 JSON 文件获取 `status`、`timestamp`、`added`、`skipped`、`failed`、`exit_code` 以及（失败时）`error` 等字段，可由外部监控系统或 `/health` 静态探针读取。启用 Telegram 后会额外暴露 `tg_queue`、`tg_sent`、`tg_failed`、`tg_retries`、`tg_rate_limited`、`tg_skipped`、`tg_last_sent` 指标。
 
 ## 项目结构
 
