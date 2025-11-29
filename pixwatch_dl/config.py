@@ -85,6 +85,10 @@ class Config:
     extra_gallery_args: tuple[str, ...] = field(default_factory=tuple)
     telegram_enabled: bool = True
     telegram_bot_token: Optional[str] = None
+    telegram_use_mtproto: bool = False
+    telegram_api_id: Optional[int] = None
+    telegram_api_hash: Optional[str] = None
+    telegram_session_path: Optional[Path] = None
     telegram_chat_ids: tuple[str, ...] = field(default_factory=tuple)
     telegram_queue_path: Optional[Path] = None
     telegram_caption_template: str = "{title} — {author}\n{work_url}"
@@ -111,11 +115,13 @@ class Config:
     def telegram_active(self) -> bool:
         """判断 Telegram 通知是否满足启用条件。"""
 
-        return bool(
-            self.telegram_enabled
-            and self.telegram_bot_token
-            and self.telegram_chat_ids
+        has_bot = bool(self.telegram_bot_token)
+        has_mtproto = bool(
+            self.telegram_use_mtproto
+            and self.telegram_api_id
+            and self.telegram_api_hash
         )
+        return bool(self.telegram_enabled and self.telegram_chat_ids and (has_bot or has_mtproto))
 
     @property
     def telegram_queue_file(self) -> Optional[Path]:
@@ -247,6 +253,8 @@ def _ensure_directories(config: Config) -> None:
     config.health_path.parent.mkdir(parents=True, exist_ok=True)
     if not config.archive_path.exists():
         config.archive_path.touch()
+    if config.telegram_session_path is not None:
+        config.telegram_session_path.parent.mkdir(parents=True, exist_ok=True)
     queue_path = config.telegram_queue_file
     if queue_path is not None:
         queue_path.parent.mkdir(parents=True, exist_ok=True)

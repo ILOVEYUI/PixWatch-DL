@@ -32,11 +32,13 @@ PixWatch DL 持续同步指定 Pixiv 账号的公共收藏，基于 [`gallery-dl
      - `backoff_initial_seconds`、`backoff_multiplier`、`backoff_max_seconds`：网络退避策略。
      - `proxy`（可选）：HTTP/HTTPS 代理地址。
      - `extra_gallery_args`（可选）：追加给 `gallery-dl` 的参数序列。
-     - `telegram_bot_token`、`telegram_chat_ids`（可选）：启用 Telegram 推送所需的 Bot Token 与目标 Chat ID（可多值，空格/逗号分隔）。
+    - `telegram_bot_token`、`telegram_chat_ids`（可选）：启用 Telegram 推送所需的 Bot Token 与目标 Chat ID（可多值，空格/逗号分隔）。
+    - `telegram_use_mtproto`、`telegram_api_id`、`telegram_api_hash`、`telegram_session_path`（可选）：启用 Pyrogram（MTProto）用户会话上传大文件，保留 Bot Token 兼容性；首次登录会在 `telegram_session_path` 下生成 session 文件。
      - `telegram_queue_path`（可选）：Telegram 发送队列 SQLite 文件路径；未配置时默认放置于下载目录。
      - `telegram_caption_template`、`telegram_caption_max_length`、`telegram_include_tags`：自定义消息模板、长度上限与标签附加策略。
      - `telegram_send_media_group`、`telegram_worker_poll_seconds`、`telegram_max_attempts`、`telegram_retry_backoff_*`：发送批量策略、轮询频率与退避参数；当单个任务连续失败次数达到 `telegram_max_attempts` 时会自动跳过并记为已发送。
-     - `telegram_document_fallback`、`telegram_disable_notifications`、`telegram_proxy`：文档降级、通知开关与独立代理配置。
+    - `telegram_document_fallback`、`telegram_disable_notifications`、`telegram_proxy`：文档降级、通知开关与独立代理配置。
+    - （可选）安装 MTProto 依赖：`pip install .[mtproto]` 或 `pip install "pyrogram>=2.0" "tgcrypto>=1.2.5"`；开启 `telegram_use_mtproto = true` 后即可使用用户会话上传超大文件。
 
 2. **安装依赖**：`pip install -e .[dev]`（开发环境需 `pytest`）。
 

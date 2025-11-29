@@ -16,6 +16,7 @@ pixwatch-limited = "pixwatch_dl.limited:main"
 # 可选依赖：本地开发或测试使用
 [project.optional-dependencies]
 dev = ["pytest>=7.4"]
+mtproto = ["pyrogram>=2.0", "tgcrypto>=1.2.5"]
 
 # 构建工具配置
 [build-system]

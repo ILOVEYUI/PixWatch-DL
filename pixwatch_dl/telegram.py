@@ -10,6 +10,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
+try:
+    from pyrogram import Client as _PyroClient, errors as _pyro_errors
+    from pyrogram.types import (
+        InputMediaAnimation as _PyroMediaAnimation,
+        InputMediaDocument as _PyroMediaDocument,
+        InputMediaPhoto as _PyroMediaPhoto,
+        InputMediaVideo as _PyroMediaVideo,
+    )
+
+    _HAS_PYROGRAM = True
+except Exception:  # ImportError 等
+    _HAS_PYROGRAM = False
+    _PyroClient = None
+
 from .config import Config
 from .gallery import DownloadedMedia
 from .http_client import HttpClient, HttpResponse
@@ -532,6 +546,118 @@ class TelegramAPI:
         return "document"
 
 
+class PyrogramAPI:
+    """基于 Pyrogram（MTProto）的传输层，实现与 :class:`TelegramAPI` 相同的接口。"""
+
+    def __init__(self, api_id: int, api_hash: str, *, session_path: Optional[Path] = None, proxy: Optional[str] = None) -> None:
+        if not _HAS_PYROGRAM:
+            raise ImportError("Pyrogram is not installed")
+        self._client = self._build_client(api_id, api_hash, session_path=session_path, proxy=proxy)
+        self._client.start()
+
+    def close(self) -> None:
+        """关闭底层客户端。"""
+
+        try:
+            self._client.stop()
+        except Exception:
+            LOGGER.debug("pyrogram client stop failed", exc_info=True)
+
+    def send_media_group(self, chat_id: str, rows: Sequence[QueueRow], *, disable_notifications: bool) -> None:
+        """发送媒体组，仅支持图片/视频/动图。"""
+
+        if not rows:
+            return
+        if not all(row.media_type in {"photo", "video", "animation"} for row in rows):
+            raise TelegramRecoverableError("media group not supported for document")
+        media: list[object] = []
+        for idx, row in enumerate(rows):
+            caption = row.caption if idx == 0 else None
+            if row.media_type == "photo":
+                media.append(_PyroMediaPhoto(row.file_path, caption=caption))
+            elif row.media_type == "video":
+                media.append(_PyroMediaVideo(row.file_path, caption=caption))
+            else:
+                media.append(_PyroMediaAnimation(row.file_path, caption=caption))
+        self._invoke(
+            self._client.send_media_group,
+            chat_id,
+            media,
+            disable_notification=disable_notifications,
+        )
+
+    def send_single(self, row: QueueRow, *, disable_notifications: bool) -> None:
+        """发送单条媒体，自动匹配对应接口。"""
+
+        kwargs = {"caption": row.caption, "disable_notification": disable_notifications}
+        if row.media_type == "photo":
+            self._invoke(self._client.send_photo, row.chat_id, row.file_path, **kwargs)
+        elif row.media_type == "video":
+            self._invoke(self._client.send_video, row.chat_id, row.file_path, **kwargs)
+        elif row.media_type == "animation":
+            self._invoke(self._client.send_animation, row.chat_id, row.file_path, **kwargs)
+        else:
+            self._invoke(self._client.send_document, row.chat_id, row.file_path, **kwargs)
+
+    def _build_client(self, api_id: int, api_hash: str, *, session_path: Optional[Path], proxy: Optional[str]):
+        session_name = "pixwatch"
+        workdir: Optional[Path] = None
+        if session_path:
+            session_name = session_path.stem
+            workdir = session_path.parent
+        proxy_dict = self._parse_proxy(proxy) if proxy else None
+        return _PyroClient(
+            session_name,
+            api_id=api_id,
+            api_hash=api_hash,
+            workdir=str(workdir) if workdir else None,
+            proxy=proxy_dict,
+        )
+
+    def _parse_proxy(self, proxy: str) -> Optional[dict]:
+        from urllib.parse import urlparse
+
+        try:
+            parsed = urlparse(proxy)
+            if not parsed.scheme or not parsed.hostname or not parsed.port:
+                return None
+            proxy_dict = {
+                "scheme": parsed.scheme,
+                "hostname": parsed.hostname,
+                "port": parsed.port,
+            }
+            if parsed.username:
+                proxy_dict["username"] = parsed.username
+            if parsed.password:
+                proxy_dict["password"] = parsed.password
+            return proxy_dict
+        except Exception:
+            LOGGER.warning("invalid proxy for pyrogram", extra={"proxy": proxy})
+            return None
+
+    def _invoke(self, func, *args, **kwargs) -> None:
+        try:
+            func(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            self._raise_mapped(exc)
+
+    def _raise_mapped(self, exc: Exception) -> None:
+        msg = str(exc)
+        if _HAS_PYROGRAM and isinstance(exc, getattr(_pyro_errors, "FloodWait", tuple())):
+            retry_after = getattr(exc, "value", None)
+            raise TelegramRateLimitError(msg, retry_after=retry_after) from exc
+        if "FILE_TOO_BIG" in msg or "FILE_TOO_LARGE" in msg:
+            raise TelegramFileTooLargeError(msg) from exc
+        if _HAS_PYROGRAM and isinstance(exc, getattr(_pyro_errors, "RPCError", tuple())):
+            # 对于服务器错误或可重试错误，归类为可恢复
+            if getattr(exc, "x", None) in {500, 502, 503, 504}:
+                raise TelegramRecoverableError(msg) from exc
+            if "timeout" in msg.lower() or "timed out" in msg.lower():
+                raise TelegramRecoverableError(msg) from exc
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            raise TelegramRecoverableError(msg) from exc
+        raise TelegramFatalError(msg) from exc
+
 class TelegramDispatcher:
     """后台线程，负责从队列读取任务并调用 Telegram API。"""
 
@@ -545,7 +671,19 @@ class TelegramDispatcher:
         self.queue = TelegramQueue(queue_path)
         self.metrics = TelegramMetrics()
         proxy = config.telegram_proxy or config.proxy
-        self.api = TelegramAPI(config.telegram_bot_token or "", proxy=proxy)
+        if config.telegram_use_mtproto and config.telegram_api_id and config.telegram_api_hash:
+            if not _HAS_PYROGRAM:
+                raise ImportError(
+                    "Pyrogram is not installed; install the 'mtproto' extra or set telegram_use_mtproto=false"
+                )
+            self.api = PyrogramAPI(
+                config.telegram_api_id,
+                config.telegram_api_hash,
+                session_path=config.telegram_session_path,
+                proxy=proxy,
+            )
+        else:
+            self.api = TelegramAPI(config.telegram_bot_token or "", proxy=proxy)
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name="telegram-sender", daemon=True)
 
@@ -666,20 +804,44 @@ class TelegramDispatcher:
                 try:
                     self._send_media_group(chunk)
                 except TelegramFileTooLargeError as exc:
-                    LOGGER.warning("telegram media group too large, falling back", extra={"group": batch.group_id, "error": str(exc)})
-                    if self.config.telegram_document_fallback:
-                        to_skip, to_retry = self._partition_skippable(chunk)
-                        if to_skip:
-                            self._mark_skipped(to_skip, str(exc))
-                        if to_retry:
-                            self.queue.update_media_type(to_retry, "document")
-                            delay = self._next_delay(max(row.attempts for row in to_retry) + 1)
-                            self.queue.reschedule(to_retry, delay, str(exc))
-                            self.metrics.record_retry(len(to_retry))
+                    LOGGER.warning(
+                        "telegram media group too large; falling back to document+single",
+                        extra={"group": batch.group_id, "error": str(exc)},
+                    )
+                    if not self.config.telegram_document_fallback:
+                        self.queue.mark_failed(chunk, str(exc))
+                        self.metrics.record_failed(len(chunk))
                         return
-                    self.queue.mark_failed(chunk, str(exc))
-                    self.metrics.record_failed(len(chunk))
-                    return
+                    to_skip, to_retry = self._partition_skippable(chunk)
+                    if to_skip:
+                        self._mark_skipped(to_skip, str(exc))
+                    if not to_retry:
+                        return
+                    # 降级为 document 并逐条发送，避免再次媒体组失败
+                    self.queue.update_media_type(to_retry, "document")
+                    for row in list(to_retry):
+                        try:
+                            self._send_single(row)
+                        except TelegramRateLimitError as rate:
+                            delay = (
+                                (rate.retry_after or self.config.telegram_retry_backoff_initial)
+                                + self.config.telegram_rate_limit_padding_seconds
+                            )
+                            rest = to_retry[to_retry.index(row) :]
+                            self.queue.reschedule(rest, delay, str(rate))
+                            self.metrics.record_rate_limit()
+                            return
+                        except TelegramRecoverableError as rec:
+                            delay = self._next_delay(row.attempts + 1)
+                            self.queue.reschedule([row], delay, str(rec))
+                            self.metrics.record_retry(1)
+                        except TelegramFatalError as fat:
+                            self.queue.mark_failed([row], str(fat))
+                            self.metrics.record_failed(1)
+                        else:
+                            self.queue.mark_sent([row])
+                            self.metrics.record_sent(1)
+                    continue
                 except TelegramRateLimitError as exc:
                     LOGGER.warning("telegram rate limited", extra={"group": batch.group_id, "retry_after": exc.retry_after})
                     to_skip, to_retry = self._partition_skippable(chunk)
